@@ -41,11 +41,11 @@ func main() {
 		batchFetchNumbers,
 		dataloader2.WithBatchDuration[int, string](16*time.Millisecond),
 		dataloader2.WithBatchCap[int, string](1_000),
-		dataloader2.WithWorker[int, string](2),
+		//dataloader2.WithWorker[int, string](2),
 	)
 	defer flush()
 
-	n := 100
+	n := 1_000
 	var wg sync.WaitGroup
 	wg.Add(n)
 
@@ -53,15 +53,15 @@ func main() {
 		go func(i int) {
 			defer wg.Done()
 
-			//fmt.Println("start worker", i)
-			//randSleep()
+			fmt.Println("start worker", i)
+			randSleep()
 
 			res, err := dl2.Load(i)
 			if err != nil {
 				panic(err)
 			}
 			_ = res
-			//fmt.Println("end worker", i, res)
+			fmt.Println("end worker", i, res)
 		}(i)
 	}
 

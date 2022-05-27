@@ -144,7 +144,7 @@ func (l *Dataloader[K, T]) loop() {
 		case <-l.done:
 			return
 		case <-ticker.C:
-			l.flush(keys)
+			go l.flush(keys)
 			keys = nil
 		case thunk := <-l.ch:
 			ticker.Reset(l.batchDuration)
@@ -154,7 +154,7 @@ func (l *Dataloader[K, T]) loop() {
 				continue
 			}
 
-			l.flush(keys)
+			go l.flush(keys)
 			keys = nil
 		}
 	}
