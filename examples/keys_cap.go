@@ -9,14 +9,19 @@ import (
 	"github.com/alextanhongpin/dataloader2"
 )
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 func randSleep() {
-	duration := time.Duration(rand.Intn(1_000)) * time.Millisecond
+	n := rand.Intn(5_000)
+	duration := time.Duration(n) * time.Millisecond
 	time.Sleep(duration)
 }
 
 func batchFetchNumbers(keys []int) (map[int]string, error) {
 	fmt.Println("fetching keys", len(keys), keys)
-	randSleep()
+	time.Sleep(5 * time.Second)
 
 	result := make(map[int]string, len(keys))
 	for _, k := range keys {
@@ -34,12 +39,13 @@ func main() {
 
 	dl2, flush := dataloader2.New(
 		batchFetchNumbers,
-		dataloader2.WithBatchDuration[int, string](32*time.Millisecond),
-		dataloader2.WithBatchCap[int, string](100),
+		dataloader2.WithBatchDuration[int, string](16*time.Millisecond),
+		dataloader2.WithBatchCap[int, string](1_000),
+		dataloader2.WithWorker[int, string](2),
 	)
 	defer flush()
 
-	n := 1_000
+	n := 100
 	var wg sync.WaitGroup
 	wg.Add(n)
 
@@ -47,14 +53,15 @@ func main() {
 		go func(i int) {
 			defer wg.Done()
 
-			fmt.Println("start worker", i)
-			randSleep()
+			//fmt.Println("start worker", i)
+			//randSleep()
 
-			res, err := dl2.Load(rand.Intn(n))
+			res, err := dl2.Load(i)
 			if err != nil {
 				panic(err)
 			}
-			fmt.Println("end worker", i, res)
+			_ = res
+			//fmt.Println("end worker", i, res)
 		}(i)
 	}
 

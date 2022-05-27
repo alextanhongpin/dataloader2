@@ -10,7 +10,8 @@ import (
 var ErrKeyNotFound = errors.New("key not found")
 
 const (
-	batchDuration = 16 * time.Millisecond
+	Size          = 16
+	batchDuration = Size * time.Millisecond
 )
 
 type BatchFunc[K comparable, T any] func(keys []K) (map[K]T, error)
@@ -25,6 +26,7 @@ type Dataloader[K comparable, T any] struct {
 	init          sync.Once
 	mu            sync.RWMutex
 	wg            sync.WaitGroup
+	worker        int
 }
 
 func New[K comparable, T any](batchFunc BatchFunc[K, T], options ...Option[K, T]) (*Dataloader[K, T], func()) {
@@ -32,9 +34,10 @@ func New[K comparable, T any](batchFunc BatchFunc[K, T], options ...Option[K, T]
 		batchCap:      0,
 		batchDuration: batchDuration,
 		batchFunc:     batchFunc,
-		cache:         make(map[K]*Thunk[K, T], 16),
-		ch:            make(chan *Thunk[K, T]),
+		cache:         make(map[K]*Thunk[K, T], Size),
+		ch:            make(chan *Thunk[K, T], Size),
 		done:          make(chan struct{}),
+		worker:        1,
 	}
 
 	for _, opt := range options {
@@ -88,7 +91,7 @@ func (l *Dataloader[K, T]) LoadMany(keys []K) map[K]*Result[T] {
 		go func(i int, key K) {
 			defer wg.Done()
 
-			result[i] = NewResult[T](l.Load(key))
+			result[i] = NewResult(l.Load(key))
 		}(i, key)
 	}
 
@@ -104,8 +107,10 @@ func (l *Dataloader[K, T]) LoadMany(keys []K) map[K]*Result[T] {
 
 func (l *Dataloader[K, T]) Load(key K) (T, error) {
 	l.init.Do(func() {
-		l.wg.Add(1)
-		go l.loop()
+		l.wg.Add(l.worker)
+		for i := 0; i < l.worker; i++ {
+			go l.loop()
+		}
 	})
 
 	l.mu.RLock()
@@ -129,7 +134,7 @@ func (l *Dataloader[K, T]) Load(key K) (T, error) {
 func (l *Dataloader[K, T]) loop() {
 	defer l.wg.Done()
 
-	keys := make([]K, 0, 16)
+	keys := make([]K, 0, l.batchCap)
 
 	ticker := time.NewTicker(l.batchDuration)
 	defer ticker.Stop()
@@ -151,7 +156,6 @@ func (l *Dataloader[K, T]) loop() {
 
 			l.flush(keys)
 			keys = nil
-
 		}
 	}
 }

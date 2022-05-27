@@ -42,7 +42,7 @@ func main() {
 			defer wg.Done()
 
 			fmt.Println("start worker", i)
-			res, err := dl2.Load(i)
+			res, err := dl2.Load(i / 2)
 			if err != nil {
 				fmt.Println("worker error", i, err)
 				return
