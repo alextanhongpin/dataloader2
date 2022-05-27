@@ -53,19 +53,19 @@ func New[K comparable, T any](batchFunc BatchFunc[K, T], options ...Option[K, T]
 	}
 }
 
-// Prime sets the cache data if it does not exists. Does not overwrite existing
-// cache data.
+// Prime sets the cache data if it does not exists, or overwrites the data if it already exists.
 func (l *Dataloader[K, T]) Prime(key K, res T) bool {
 	l.mu.RLock()
 	t, ok := l.cache[key]
 	l.mu.RUnlock()
 
-	if ok && t.done() {
+	if ok && t.ok() {
 		return false
 	}
 
-	if ok {
+	if ok && t.pending() {
 		t.resolve(res)
+
 		return true
 	}
 
