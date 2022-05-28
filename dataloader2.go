@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-var ErrKeyNotFound = errors.New("key not found")
+var (
+	ErrKeyNotFound = errors.New("dataloader2: key not found")
+	ErrAborted     = errors.New("dataloader2: aborted")
+)
 
 const (
 	Size          = 16
@@ -46,6 +49,10 @@ func New[K comparable, T any](batchFunc BatchFunc[K, T], options ...Option[K, T]
 
 	var once sync.Once
 	return dl, func() {
+		dl.init.Do(func() {
+			// Waste the init so that it doesn't setup the worker.
+			// Useful when calling flush before the `Load` method.
+		})
 		once.Do(func() {
 			close(dl.done)
 			dl.wg.Wait()
@@ -53,8 +60,21 @@ func New[K comparable, T any](batchFunc BatchFunc[K, T], options ...Option[K, T]
 	}
 }
 
+func (l *Dataloader[K, T]) isDone() bool {
+	select {
+	case <-l.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // Prime sets the cache data if it does not exists, or overwrites the data if it already exists.
 func (l *Dataloader[K, T]) Prime(key K, res T) bool {
+	if l.isDone() {
+		return false
+	}
+
 	l.mu.RLock()
 	t, ok := l.cache[key]
 	l.mu.RUnlock()
@@ -78,9 +98,13 @@ func (l *Dataloader[K, T]) Prime(key K, res T) bool {
 	return true
 }
 
-func (l *Dataloader[K, T]) LoadMany(keys []K) map[K]*Result[T] {
+func (l *Dataloader[K, T]) LoadMany(keys []K) (map[K]*Result[T], error) {
+	if l.isDone() {
+		return nil, ErrAborted
+	}
+
 	if len(keys) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var wg sync.WaitGroup
@@ -102,11 +126,15 @@ func (l *Dataloader[K, T]) LoadMany(keys []K) map[K]*Result[T] {
 		resultByKey[keys[i]] = res
 	}
 
-	return resultByKey
+	return resultByKey, nil
 }
 
 func (l *Dataloader[K, T]) Load(key K) (T, error) {
 	l.init.Do(func() {
+		if l.isDone() {
+			return
+		}
+
 		l.wg.Add(l.worker)
 		for i := 0; i < l.worker; i++ {
 			go l.loop()
@@ -119,6 +147,11 @@ func (l *Dataloader[K, T]) Load(key K) (T, error) {
 
 	if ok {
 		return t.Wait()
+	}
+
+	if l.isDone() {
+		var t T
+		return t, ErrAborted
 	}
 
 	l.mu.Lock()
@@ -142,6 +175,13 @@ func (l *Dataloader[K, T]) loop() {
 	for {
 		select {
 		case <-l.done:
+			l.mu.Lock()
+			defer l.mu.Unlock()
+
+			for key := range l.cache {
+				l.cache[key].reject(ErrAborted)
+			}
+
 			return
 		case <-ticker.C:
 			go l.flush(keys)
@@ -172,6 +212,7 @@ func (l *Dataloader[K, T]) flush(keys []K) {
 	for _, key := range keys {
 		if err != nil {
 			l.cache[key].reject(err)
+
 			continue
 		}
 
