@@ -1,12 +1,16 @@
 package dataloader2
 
-import "time"
+import (
+	"time"
+
+	"golang.org/x/sync/semaphore"
+)
 
 type Option[K comparable, T any] func(*Dataloader[K, T])
 
 func WithWorker[K comparable, T any](n int) Option[K, T] {
 	return func(d *Dataloader[K, T]) {
-		d.worker = n
+		d.worker = semaphore.NewWeighted(int64(n))
 	}
 }
 

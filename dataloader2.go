@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -31,7 +34,7 @@ type Dataloader[K comparable, T any] struct {
 	init          sync.Once
 	mu            sync.RWMutex
 	wg            sync.WaitGroup
-	worker        int
+	worker        *semaphore.Weighted
 }
 
 func New[K comparable, T any](ctx context.Context, batchFunc BatchFunc[K, T], options ...Option[K, T]) (*Dataloader[K, T], func()) {
@@ -41,9 +44,9 @@ func New[K comparable, T any](ctx context.Context, batchFunc BatchFunc[K, T], op
 		batchFunc:     batchFunc,
 		cache:         make(map[K]*Thunk[K, T], Size),
 		ch:            make(chan *Thunk[K, T], Size),
-		done:          make(chan struct{}),
-		worker:        1,
 		ctx:           ctx,
+		done:          make(chan struct{}),
+		worker:        semaphore.NewWeighted(int64(runtime.NumCPU())),
 	}
 
 	for _, opt := range options {
@@ -63,13 +66,43 @@ func New[K comparable, T any](ctx context.Context, batchFunc BatchFunc[K, T], op
 	}
 }
 
-func (l *Dataloader[K, T]) isDone() bool {
-	select {
-	case <-l.done:
-		return true
-	default:
-		return false
+func (l *Dataloader[K, T]) Load(key K) (T, error) {
+	return l.loadThunk(key).Wait()
+}
+
+func (l *Dataloader[K, T]) LoadMany(keys []K) (map[K]*Result[T], error) {
+	if l.isDone() {
+		return nil, ErrAborted
 	}
+
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	var wg sync.WaitGroup
+
+	result := make([]*Result[T], len(keys))
+
+	for i, key := range keys {
+		wg.Add(1)
+
+		thunk := l.loadThunk(key)
+
+		go func(i int, thunk *Thunk[K, T]) {
+			defer wg.Done()
+
+			result[i] = NewResult(thunk.Wait())
+		}(i, thunk)
+	}
+
+	wg.Wait()
+
+	resultByKey := make(map[K]*Result[T])
+	for i, res := range result {
+		resultByKey[keys[i]] = res
+	}
+
+	return resultByKey, nil
 }
 
 // Prime sets the cache data if it does not exists, or overwrites the data if it already exists.
@@ -101,47 +134,13 @@ func (l *Dataloader[K, T]) Prime(key K, res T) bool {
 	return true
 }
 
-func (l *Dataloader[K, T]) LoadMany(keys []K) (map[K]*Result[T], error) {
-	if l.isDone() {
-		return nil, ErrAborted
-	}
-
-	if len(keys) == 0 {
-		return nil, nil
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(len(keys))
-
-	result := make([]*Result[T], len(keys))
-	for i, key := range keys {
-		go func(i int, key K) {
-			defer wg.Done()
-
-			result[i] = NewResult(l.Load(key))
-		}(i, key)
-	}
-
-	wg.Wait()
-
-	resultByKey := make(map[K]*Result[T])
-	for i, res := range result {
-		resultByKey[keys[i]] = res
-	}
-
-	return resultByKey, nil
-}
-
-func (l *Dataloader[K, T]) Load(key K) (T, error) {
+func (l *Dataloader[K, T]) loadThunk(key K) *Thunk[K, T] {
 	l.init.Do(func() {
 		if l.isDone() {
 			return
 		}
 
-		l.wg.Add(l.worker)
-		for i := 0; i < l.worker; i++ {
-			go l.loop()
-		}
+		l.loopAsync()
 	})
 
 	l.mu.RLock()
@@ -149,31 +148,44 @@ func (l *Dataloader[K, T]) Load(key K) (T, error) {
 	l.mu.RUnlock()
 
 	if ok {
-		return t.Wait()
+		return t
 	}
 
 	if l.isDone() {
-		var t T
-		return t, ErrAborted
+		thunk := NewThunk[K, T](key)
+		thunk.reject(ErrAborted)
+
+		return thunk
 	}
 
-	l.mu.Lock()
 	thunk := NewThunk[K, T](key)
+
+	l.mu.Lock()
 	l.cache[key] = thunk
 	l.mu.Unlock()
 
 	l.ch <- thunk
 
-	return thunk.Wait()
+	return thunk
+}
+
+func (l *Dataloader[K, T]) loopAsync() {
+	l.wg.Add(1)
+
+	go func() {
+		defer l.wg.Done()
+		l.loop()
+	}()
 }
 
 func (l *Dataloader[K, T]) loop() {
-	defer l.wg.Done()
-
 	keys := make([]K, 0, l.batchCap)
 
 	ticker := time.NewTicker(l.batchDuration)
 	defer ticker.Stop()
+
+	ctx, cancel := context.WithCancel(l.ctx)
+	defer cancel()
 
 	for {
 		select {
@@ -187,7 +199,7 @@ func (l *Dataloader[K, T]) loop() {
 
 			return
 		case <-ticker.C:
-			go l.flush(keys)
+			l.flushAsync(ctx, keys)
 			keys = nil
 		case thunk := <-l.ch:
 			ticker.Reset(l.batchDuration)
@@ -197,18 +209,34 @@ func (l *Dataloader[K, T]) loop() {
 				continue
 			}
 
-			go l.flush(keys)
+			l.flushAsync(ctx, keys)
 			keys = nil
 		}
 	}
 }
 
-func (l *Dataloader[K, T]) flush(keys []K) {
+func (l *Dataloader[K, T]) flushAsync(ctx context.Context, keys []K) {
 	if len(keys) == 0 {
 		return
 	}
 
-	res, err := l.batchFunc(l.ctx, keys)
+	l.worker.Acquire(ctx, 1)
+	l.wg.Add(1)
+
+	go func() {
+		defer l.wg.Done()
+		defer l.worker.Release(1)
+
+		l.flush(ctx, keys)
+	}()
+}
+
+func (l *Dataloader[K, T]) flush(ctx context.Context, keys []K) {
+	if len(keys) == 0 {
+		return
+	}
+
+	res, err := l.batchFunc(ctx, keys)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -225,5 +253,14 @@ func (l *Dataloader[K, T]) flush(keys []K) {
 		} else {
 			l.cache[key].resolve(val)
 		}
+	}
+}
+
+func (l *Dataloader[K, T]) isDone() bool {
+	select {
+	case <-l.done:
+		return true
+	default:
+		return false
 	}
 }
