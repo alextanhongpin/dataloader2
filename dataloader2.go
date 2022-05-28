@@ -1,6 +1,7 @@
 package dataloader2
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -17,7 +18,7 @@ const (
 	batchDuration = Size * time.Millisecond
 )
 
-type BatchFunc[K comparable, T any] func(keys []K) (map[K]T, error)
+type BatchFunc[K comparable, T any] func(ctx context.Context, keys []K) (map[K]T, error)
 
 type Dataloader[K comparable, T any] struct {
 	batchCap      int
@@ -25,6 +26,7 @@ type Dataloader[K comparable, T any] struct {
 	batchFunc     BatchFunc[K, T]
 	cache         map[K]*Thunk[K, T]
 	ch            chan *Thunk[K, T]
+	ctx           context.Context
 	done          chan struct{}
 	init          sync.Once
 	mu            sync.RWMutex
@@ -32,7 +34,7 @@ type Dataloader[K comparable, T any] struct {
 	worker        int
 }
 
-func New[K comparable, T any](batchFunc BatchFunc[K, T], options ...Option[K, T]) (*Dataloader[K, T], func()) {
+func New[K comparable, T any](ctx context.Context, batchFunc BatchFunc[K, T], options ...Option[K, T]) (*Dataloader[K, T], func()) {
 	dl := &Dataloader[K, T]{
 		batchCap:      0,
 		batchDuration: batchDuration,
@@ -41,6 +43,7 @@ func New[K comparable, T any](batchFunc BatchFunc[K, T], options ...Option[K, T]
 		ch:            make(chan *Thunk[K, T], Size),
 		done:          make(chan struct{}),
 		worker:        1,
+		ctx:           ctx,
 	}
 
 	for _, opt := range options {
@@ -205,7 +208,7 @@ func (l *Dataloader[K, T]) flush(keys []K) {
 		return
 	}
 
-	res, err := l.batchFunc(keys)
+	res, err := l.batchFunc(l.ctx, keys)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

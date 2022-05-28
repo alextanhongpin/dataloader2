@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -19,7 +20,7 @@ func randSleep() {
 	time.Sleep(duration)
 }
 
-func batchFetchNumbers(keys []int) (map[int]string, error) {
+func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) {
 	fmt.Println("fetching keys", len(keys), keys)
 	time.Sleep(5 * time.Second)
 
@@ -38,6 +39,7 @@ func main() {
 	}()
 
 	dl2, flush := dataloader2.New(
+		context.Background(),
 		batchFetchNumbers,
 		dataloader2.WithBatchDuration[int, string](16*time.Millisecond),
 		dataloader2.WithBatchCap[int, string](1_000),

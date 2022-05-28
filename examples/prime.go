@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/alextanhongpin/dataloader2"
 )
 
-func batchFetchNumbers(keys []int) (map[int]string, error) {
+func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) {
 	fmt.Println("fetching keys", keys)
 	time.Sleep(1 * time.Second)
 
@@ -25,7 +26,7 @@ func main() {
 		fmt.Println(time.Since(start))
 	}()
 
-	dl2, flush := dataloader2.New(batchFetchNumbers)
+	dl2, flush := dataloader2.New(context.Background(), batchFetchNumbers)
 	defer flush()
 	fmt.Println(dl2.Prime(1, "hello world"))
 
