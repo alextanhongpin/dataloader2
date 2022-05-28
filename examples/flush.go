@@ -10,15 +10,19 @@ import (
 
 func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) {
 	fmt.Println("fetching keys", keys)
-	time.Sleep(5 * time.Second)
+	select {
+	case <-time.After(5 * time.Second):
+		result := make(map[int]string, len(keys))
+		for _, key := range keys {
+			result[key] = fmt.Sprint(key)
+		}
+		fmt.Println("fetched keys")
 
-	result := make(map[int]string, len(keys))
-	for _, key := range keys {
-		result[key] = fmt.Sprint(key)
+		return result, nil
+	case <-ctx.Done():
+		fmt.Println("batch aborted")
+		return nil, ctx.Err()
 	}
-	fmt.Println("fetched keys")
-
-	return result, nil
 }
 
 func main() {
@@ -26,10 +30,9 @@ func main() {
 	defer func() {
 		fmt.Println(time.Since(start))
 	}()
+	done := make(chan bool)
 
 	dl2, flush := dataloader2.New(context.Background(), batchFetchNumbers)
-	// Immediately called flush.
-	flush()
 
 	primed := dl2.Prime(1, "hello world")
 	fmt.Println("primed", primed)
@@ -39,6 +42,12 @@ func main() {
 		fmt.Println("load error:", err)
 	}
 	fmt.Println("res:", res)
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		flush()
+		close(done)
+	}()
 
 	res, err = dl2.Load(2)
 	if err != nil {
@@ -54,4 +63,5 @@ func main() {
 	for _, res := range results {
 		fmt.Println(res.Unwrap())
 	}
+	<-done
 }
