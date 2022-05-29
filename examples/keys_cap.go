@@ -58,7 +58,7 @@ func main() {
 			fmt.Println("start worker", i)
 			randSleep()
 
-			res, err := dl2.Load(i)
+			res, err := dl2.Load(i / 2)
 			if err != nil {
 				panic(err)
 			}

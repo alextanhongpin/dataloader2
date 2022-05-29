@@ -7,8 +7,6 @@ import (
 	"runtime"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -34,7 +32,7 @@ type Dataloader[K comparable, T any] struct {
 	init          sync.Once
 	mu            sync.RWMutex
 	wg            sync.WaitGroup
-	worker        *semaphore.Weighted
+	worker        chan struct{}
 }
 
 func New[K comparable, T any](ctx context.Context, batchFunc BatchFunc[K, T], options ...Option[K, T]) (*Dataloader[K, T], func()) {
@@ -46,7 +44,7 @@ func New[K comparable, T any](ctx context.Context, batchFunc BatchFunc[K, T], op
 		ch:            make(chan *Thunk[K, T], Size),
 		ctx:           ctx,
 		done:          make(chan struct{}),
-		worker:        semaphore.NewWeighted(int64(runtime.NumCPU())),
+		worker:        make(chan struct{}, runtime.NumCPU()),
 	}
 
 	for _, opt := range options {
@@ -107,10 +105,6 @@ func (l *Dataloader[K, T]) LoadMany(keys []K) (map[K]*Result[T], error) {
 
 // Prime sets the cache data if it does not exists, or overwrites the data if it already exists.
 func (l *Dataloader[K, T]) Prime(key K, res T) bool {
-	if l.isDone() {
-		return false
-	}
-
 	l.mu.RLock()
 	t, ok := l.cache[key]
 	l.mu.RUnlock()
@@ -122,14 +116,25 @@ func (l *Dataloader[K, T]) Prime(key K, res T) bool {
 	if ok && t.pending() {
 		t.resolve(res)
 
-		return true
+		return t.ok()
 	}
 
-	l.mu.Lock()
 	thunk := NewThunk[K, T](key)
 	thunk.resolve(res)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	t, found := l.cache[key]
+	if found {
+		if t.pending() {
+			t.resolve(res)
+
+			return t.ok()
+		}
+	}
+
 	l.cache[key] = thunk
-	l.mu.Unlock()
 
 	return true
 }
@@ -161,6 +166,16 @@ func (l *Dataloader[K, T]) loadThunk(key K) *Thunk[K, T] {
 	thunk := NewThunk[K, T](key)
 
 	l.mu.Lock()
+
+	// Potential data race - above it is detected as not
+	// found, but later it is discovered as found.
+	t, found := l.cache[key]
+	if found {
+		l.mu.Unlock()
+
+		return t
+	}
+
 	l.cache[key] = thunk
 	l.mu.Unlock()
 
@@ -220,12 +235,14 @@ func (l *Dataloader[K, T]) flushAsync(ctx context.Context, keys []K) {
 		return
 	}
 
-	l.worker.Acquire(ctx, 1)
+	l.worker <- struct{}{}
 	l.wg.Add(1)
 
 	go func() {
 		defer l.wg.Done()
-		defer l.worker.Release(1)
+		defer func() {
+			<-l.worker
+		}()
 
 		l.flush(ctx, keys)
 	}()

@@ -34,6 +34,7 @@ func main() {
 	defer flush()
 
 	n := 10
+
 	var wg sync.WaitGroup
 	wg.Add(n)
 
@@ -42,7 +43,7 @@ func main() {
 		go func(i int) {
 			defer wg.Done()
 
-			fmt.Println("start worker", i)
+			fmt.Println("start worker", i, i/2)
 			res, err := dl2.Load(i / 2)
 			if err != nil {
 				fmt.Println("worker error", i, err)

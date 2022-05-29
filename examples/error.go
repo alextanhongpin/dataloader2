@@ -39,4 +39,28 @@ func main() {
 	for _, res := range result {
 		fmt.Println(res.Unwrap())
 	}
+
+	go func() {
+
+		res, err := dl2.Load(1)
+		if err != nil {
+			fmt.Println(err)
+		}
+		fmt.Println(res)
+	}()
+	go func() {
+		fmt.Println("primed", dl2.Prime(1, "hello world"))
+
+		res, err := dl2.Load(1)
+		if err != nil {
+			fmt.Println("error", err)
+		}
+		fmt.Println("primed result", res)
+	}()
+
+	select {
+	case <-time.After(2 * time.Second):
+		fmt.Println("exiting")
+		return
+	}
 }
