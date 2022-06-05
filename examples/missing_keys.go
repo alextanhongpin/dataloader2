@@ -15,7 +15,7 @@ func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) 
 
 	result := make(map[int]string, len(keys))
 	for _, k := range keys {
-		if k < 4 {
+		if k < 3 {
 			continue
 		}
 		result[k] = fmt.Sprint(k)
@@ -25,10 +25,9 @@ func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) 
 }
 
 func main() {
-	start := time.Now()
-	defer func() {
+	defer func(start time.Time) {
 		fmt.Println(time.Since(start))
-	}()
+	}(time.Now())
 
 	dl2, flush := dataloader2.New(context.Background(), batchFetchNumbers)
 	defer flush()
@@ -43,14 +42,9 @@ func main() {
 		go func(i int) {
 			defer wg.Done()
 
-			fmt.Println("start worker", i, i/2)
+			fmt.Println("worker:", i, "key:", i/2)
 			res, err := dl2.Load(i / 2)
-			if err != nil {
-				fmt.Println("worker error", i, err)
-				return
-			}
-			fmt.Println("end worker", i, res)
-
+			fmt.Println("worker:", i, res, err)
 		}(i)
 	}
 

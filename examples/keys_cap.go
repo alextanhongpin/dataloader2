@@ -33,17 +33,16 @@ func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) 
 }
 
 func main() {
-	start := time.Now()
-	defer func() {
+	defer func(start time.Time) {
 		fmt.Println(time.Since(start))
-	}()
+	}(time.Now())
 
 	dl2, flush := dataloader2.New(
 		context.Background(),
 		batchFetchNumbers,
 		dataloader2.WithBatchDuration[int, string](16*time.Millisecond),
 		dataloader2.WithBatchCap[int, string](100),
-		dataloader2.WithWorker[int, string](10),
+		dataloader2.WithBatchWorker[int, string](10),
 	)
 	defer flush()
 

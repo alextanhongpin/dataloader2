@@ -28,16 +28,11 @@ func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) 
 }
 
 func main() {
-	start := time.Now()
-	defer func() {
+	defer func(start time.Time) {
 		fmt.Println(time.Since(start))
-	}()
+	}(time.Now())
 
-	dl2, flush := dataloader2.New(
-		context.Background(),
-		batchFetchNumbers,
-		dataloader2.WithBatchDuration[int, string](16*time.Millisecond),
-	)
+	dl2, flush := dataloader2.New(context.Background(), batchFetchNumbers)
 	defer flush()
 
 	n := 1_000
@@ -48,14 +43,11 @@ func main() {
 		go func(i int) {
 			defer wg.Done()
 
-			fmt.Println("start worker", i)
+			fmt.Println("worker: start", i)
 			randSleep()
 
 			res, err := dl2.Load(rand.Intn(n))
-			if err != nil {
-				panic(err)
-			}
-			fmt.Println("end worker", i, res)
+			fmt.Println("worker: end", i, res, err)
 		}(i)
 	}
 

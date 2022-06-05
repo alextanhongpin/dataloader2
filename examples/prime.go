@@ -21,24 +21,17 @@ func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) 
 }
 
 func main() {
-	start := time.Now()
-	defer func() {
+	defer func(start time.Time) {
 		fmt.Println(time.Since(start))
-	}()
+	}(time.Now())
 
 	dl2, flush := dataloader2.New(context.Background(), batchFetchNumbers)
 	defer flush()
-	fmt.Println(dl2.Prime(1, "hello world"))
+	fmt.Println("primed:", dl2.Prime(1, "hello world"))
 
 	res, err := dl2.Load(1)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(res)
+	fmt.Println("load(1):", res, err)
 
 	res, err = dl2.Load(2)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(res)
+	fmt.Println("load(2):", res, err)
 }

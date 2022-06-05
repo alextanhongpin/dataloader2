@@ -1,6 +1,9 @@
 package dataloader2
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 var ErrResultNotSet = errors.New("result not set")
 
@@ -8,28 +11,15 @@ type Result[T any] struct {
 	res   T
 	err   error
 	dirty bool
+	once  sync.Once
+	wg    sync.WaitGroup
 }
 
-func NewResult[T any](res T, err error) *Result[T] {
-	return &Result[T]{
-		res:   res,
-		err:   err,
-		dirty: true,
-	}
-}
+func NewResult[T any]() *Result[T] {
+	r := &Result[T]{}
+	r.wg.Add(1)
 
-func Resolve[T any](res T) *Result[T] {
-	return &Result[T]{
-		res:   res,
-		dirty: true,
-	}
-}
-
-func Reject[T any](err error) *Result[T] {
-	return &Result[T]{
-		err:   err,
-		dirty: true,
-	}
+	return r
 }
 
 func (r *Result[T]) IsZero() bool {
@@ -37,16 +27,22 @@ func (r *Result[T]) IsZero() bool {
 }
 
 func (r *Result[T]) Result() (t T) {
+	r.wg.Wait()
+
 	if r.IsZero() {
 		return
 	}
+
 	return r.res
 }
 
 func (r *Result[T]) Error() error {
+	r.wg.Wait()
+
 	if r.IsZero() {
 		return ErrResultNotSet
 	}
+
 	return r.err
 }
 
@@ -56,6 +52,26 @@ func (r *Result[T]) Ok() bool {
 
 func (r *Result[T]) Unwrap() (T, error) {
 	return r.Result(), r.Error()
+}
+
+func (r *Result[T]) resolve(t T) *Result[T] {
+	r.once.Do(func() {
+		r.dirty = true
+		r.res = t
+		r.wg.Done()
+	})
+
+	return r
+}
+
+func (r *Result[T]) reject(err error) *Result[T] {
+	r.once.Do(func() {
+		r.dirty = true
+		r.err = err
+		r.wg.Done()
+	})
+
+	return r
 }
 
 // UnwrapAll attempts to unwrap all results, and returns the first error.

@@ -9,7 +9,7 @@ import (
 )
 
 func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) {
-	fmt.Println("fetching keys", keys)
+	fmt.Println("[batchFn] fetching keys:", keys)
 
 	select {
 	case <-time.After(5 * time.Second):
@@ -17,52 +17,39 @@ func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) 
 		for _, key := range keys {
 			result[key] = fmt.Sprint(key)
 		}
-		fmt.Println("fetched keys")
+		fmt.Println("]batchFn] fetched keys:", keys)
 
 		return result, nil
 	case <-ctx.Done():
+		fmt.Println("[batchFn] aborted")
 		return nil, ctx.Err()
 	}
 }
 
 func main() {
-	start := time.Now()
-	defer func() {
+	defer func(start time.Time) {
 		fmt.Println(time.Since(start))
-	}()
+	}(time.Now())
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	dl2, flush := dataloader2.New(ctx, batchFetchNumbers)
 	defer flush()
 
-	primed := dl2.Prime(1, "hello world")
-	fmt.Println("primed", primed)
+	fmt.Println("primed:", dl2.Prime(1, "hello world"))
 
 	res, err := dl2.Load(1)
-	if err != nil {
-		fmt.Println("load error:", err)
-	}
-	fmt.Println("res:", res)
+	fmt.Println("load(1):", res, err)
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		fmt.Println("cancelling")
+		fmt.Println("cancelling...")
 		cancel()
 	}()
 
 	res, err = dl2.Load(2)
-	if err != nil {
-		fmt.Println("load error:", err)
-	}
-	fmt.Println("res:", res)
+	fmt.Println("load(2):", res, err)
 
-	results, err := dl2.LoadMany([]int{1, 2, 3})
-	if err != nil {
-		fmt.Println("loadMany error:", err)
-	}
-	fmt.Println("results:", results)
-	for _, res := range results {
-		fmt.Println(res.Unwrap())
-	}
+	result, err := dl2.LoadMany([]int{1, 2, 3})
+	fmt.Println("loadMany:", result, err)
 }

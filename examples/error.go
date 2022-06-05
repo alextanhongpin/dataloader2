@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/alextanhongpin/dataloader2"
@@ -17,50 +18,44 @@ func batchFetchNumbers(ctx context.Context, keys []int) (map[int]string, error) 
 }
 
 func main() {
-	start := time.Now()
-	defer func() {
+	defer func(start time.Time) {
 		fmt.Println(time.Since(start))
-	}()
+	}(time.Now())
 
 	dl2, flush := dataloader2.New(context.Background(), batchFetchNumbers)
 	defer flush()
 
 	res, err := dl2.Load(1)
-	if err != nil {
-		fmt.Println(err)
-	}
-	fmt.Println(res)
+	fmt.Println("load(1):", res, err)
 
 	result, err := dl2.LoadMany([]int{1, 2, 3, 4, 5, 4, 3, 2, 1})
-	if err != nil {
-		panic(err)
-	}
+	fmt.Println("loadMany:", result, err)
 
-	for _, res := range result {
-		fmt.Println(res.Unwrap())
-	}
+	var wg sync.WaitGroup
+	wg.Add(3)
 
 	go func() {
+		defer wg.Done()
 
 		res, err := dl2.Load(1)
-		if err != nil {
-			fmt.Println(err)
-		}
-		fmt.Println(res)
+		fmt.Println("go load(1):", res, err)
 	}()
+
 	go func() {
-		fmt.Println("primed", dl2.Prime(1, "hello world"))
+		defer wg.Done()
+
+		fmt.Println("go primed:", dl2.Prime(1, "hello world"))
 
 		res, err := dl2.Load(1)
-		if err != nil {
-			fmt.Println("error", err)
-		}
-		fmt.Println("primed result", res)
+		fmt.Println("go primed > load(1):", res, err)
 	}()
 
-	select {
-	case <-time.After(2 * time.Second):
-		fmt.Println("exiting")
-		return
-	}
+	go func() {
+		defer wg.Done()
+
+		result, err := dl2.LoadMany([]int{1, 2, 3, 4, 5, 4, 3, 2, 1})
+		fmt.Println("go loadMany:", result, err)
+	}()
+
+	wg.Wait()
 }
